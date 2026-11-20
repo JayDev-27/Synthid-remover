@@ -125,16 +125,20 @@ async function runVerificationSuite() {
     });
   }
 
+  const photoResults = [];
+  const photoPath = fileURLToPath(new URL('../public/hero-watermarked.jpg', import.meta.url));
+  if (!fs.existsSync(photoPath)) {
+    // The real-photo fixture was lost with the original repository (see RECOVERED.md).
+    console.warn('\n⚠️  SKIPPED FIXTURE 2: public/hero-watermarked.jpg is missing. Add a watermarked photo there to run it.');
+  } else {
   // --------------------------------------------------------------------------
   // FIXTURE 2: Realistic Textured Photograph (public/hero-watermarked.jpg)
   // --------------------------------------------------------------------------
-  const photoPath = fileURLToPath(new URL('../public/hero-watermarked.jpg', import.meta.url));
   const photoInput = fs.readFileSync(photoPath);
   const photoMeta = await sharp(photoInput).metadata();
 
   console.log(`\n[SETUP: FIXTURE 2] Loaded real photo (${photoMeta.width}x${photoMeta.height}px, ${(photoInput.length / 1024).toFixed(1)} KB)`);
 
-  const photoResults = [];
 
   for (const mode of testModes) {
     console.log(`\n[Fixture 2 - Real Photo] Mode: ${mode.toUpperCase()}`);
@@ -179,6 +183,7 @@ async function runVerificationSuite() {
     });
   }
 
+  }
   // --------------------------------------------------------------------------
   // FIXTURE 3: Transparent PNG Preservation Test (Alpha Channel Integrity)
   // --------------------------------------------------------------------------

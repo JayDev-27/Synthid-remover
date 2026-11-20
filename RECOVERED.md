@@ -33,3 +33,8 @@ Synthid-remover/scripts/test-edge-cases.mjs
 Synthid-remover/scripts/test-upload.mjs
 Synthid-remover/scripts/verify-pipeline.mjs
 ```
+
+## Audit (2026-11-20)
+
+- `npm run lint` and `npm test` pass. The test skips the real-photo fixture because `public/hero-watermarked.jpg` was lost; add any watermarked photo there to run it.
+- `npm run build` fails until these UI files are restored: `app/components/ImageDropzone`, `app/components/ProcessingLogs`, `app/components/Navbar`, `app/components/ThemeProvider`, `app/globals.css`, and the `public/` folder.
