@@ -1,18 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 380" width="1280" height="380">
   <defs>
     <!-- Dark ambient gradients matching the pitch black & emerald accent theme -->
-    <radialGradient id="topGlow" cx="50%" cy="0%" r="70%">
-      <stop offset="0%" stop-color="#10b981" stop-opacity="0.18"/>
-      <stop offset="45%" stop-color="#059669" stop-opacity="0.05"/>
+    <radialGradient id="topGlow" cx="50%" cy="0%" r="72%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.22"/>
+      <stop offset="45%" stop-color="#059669" stop-opacity="0.06"/>
       <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="centerHighlight" cx="50%" cy="40%" r="50%">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.04"/>
+    <radialGradient id="centerHighlight" cx="50%" cy="42%" r="52%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.05"/>
       <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="textShine" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="70%" stop-color="#ffffff"/>
+      <stop offset="68%" stop-color="#ffffff"/>
       <stop offset="100%" stop-color="#a1a1aa"/>
     </linearGradient>
     <linearGradient id="pillGrad" x1="0" y1="0" x2="0" y2="1">
@@ -23,7 +23,7 @@
     <!-- Technical UI grid -->
     <pattern id="matrixGrid" width="36" height="36" patternUnits="userSpaceOnUse">
       <path d="M 36 0 L 0 0 0 36" fill="none" stroke="#262626" stroke-width="0.8" stroke-opacity="0.5"/>
-      <circle cx="0" cy="0" r="1" fill="#10b981" fill-opacity="0.4"/>
+      <circle cx="0" cy="0" r="1" fill="#10b981" fill-opacity="0.45"/>
     </pattern>
   </defs>
 
@@ -36,53 +36,53 @@
   <!-- Border matching subtle card stroke #262626 -->
   <rect x="1" y="1" width="1278" height="378" rx="15" fill="none" stroke="#262626" stroke-width="1.5"/>
 
-  <!-- Top Pill Badge: v2.1 • C2PA & SynthID Deep Evasion Engine -->
-  <g transform="translate(440, 44)">
-    <rect width="400" height="34" rx="17" fill="url(#pillGrad)" stroke="#27272a" stroke-width="1"/>
+  <!-- Top Pill Badge -->
+  <g transform="translate(380, 44)">
+    <rect width="520" height="34" rx="17" fill="url(#pillGrad)" stroke="#27272a" stroke-width="1"/>
     <circle cx="22" cy="17" r="4.5" fill="#10b981"/>
     <circle cx="22" cy="17" r="7.5" fill="none" stroke="#10b981" stroke-width="1" stroke-opacity="0.5"/>
-    <text x="38" y="22" font-family="'Geist Mono', 'SF Mono', Consolas, monospace" font-size="12" fill="#d4d4d8" font-weight="600" letter-spacing="0.5">v2.1 • C2PA ANNIHILATOR &amp; SYNTHID EVASION</text>
+    <text x="38" y="21.5" font-family="'Geist Mono', 'SF Mono', Consolas, monospace" font-size="12" fill="#d4d4d8" font-weight="600" letter-spacing="0.4">v2.2 • IMAGES · ANIMATED GIF · MP4/WEBM VIDEO ENGINE</text>
   </g>
 
   <!-- Main Title -->
-  <text x="640" y="152" text-anchor="middle" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="800" fill="url(#textShine)" letter-spacing="-1.2">Realtime SynthID &amp; AI Watermark Remover</text>
+  <text x="640" y="150" text-anchor="middle" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="800" fill="url(#textShine)" letter-spacing="-1.2">Realtime SynthID &amp; AI Watermark Remover</text>
 
   <!-- Subtitle -->
-  <text x="640" y="202" text-anchor="middle" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, sans-serif" font-size="19" fill="#8f8f8f" font-weight="400" letter-spacing="-0.2">
-    Purge C2PA Provenance • Bounded Fourier Phase Scrambling • 100% In-Memory Privacy
+  <text x="640" y="198" text-anchor="middle" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, sans-serif" font-size="18.5" fill="#a1a1aa" font-weight="400" letter-spacing="-0.2">
+    Erase Badges Across Images, GIFs &amp; Videos • Purge C2PA Credentials • 100% Local Privacy
   </text>
 
-  <!-- Feature Pills Row -->
-  <g transform="translate(190, 260)">
+  <!-- Feature Pills Row (Centered within 1280px canvas: width = 940px -> x = 170) -->
+  <g transform="translate(170, 256)">
     <!-- Pill 1 -->
     <g transform="translate(0, 0)">
-      <rect width="195" height="38" rx="10" fill="#0c0c0e" stroke="#262626" stroke-width="1"/>
+      <rect width="205" height="38" rx="10" fill="#0c0c0e" stroke="#262626" stroke-width="1"/>
       <circle cx="20" cy="19" r="3.5" fill="#10b981"/>
-      <text x="34" y="24" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">Zero Server Uploads</text>
+      <text x="34" y="23.5" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">100% Browser Local</text>
     </g>
 
     <!-- Pill 2 -->
-    <g transform="translate(210, 0)">
-      <rect width="215" height="38" rx="10" fill="#0c0c0e" stroke="#262626" stroke-width="1"/>
+    <g transform="translate(221, 0)">
+      <rect width="235" height="38" rx="10" fill="#0c0c0e" stroke="#262626" stroke-width="1"/>
       <circle cx="20" cy="19" r="3.5" fill="#10b981"/>
-      <text x="34" y="24" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">C2PA Manifest Purge</text>
+      <text x="34" y="23.5" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">Image, GIF &amp; MP4/WebM</text>
     </g>
 
     <!-- Pill 3 -->
-    <g transform="translate(440, 0)">
+    <g transform="translate(472, 0)">
       <rect width="225" height="38" rx="10" fill="#0c0c0e" stroke="#262626" stroke-width="1"/>
       <circle cx="20" cy="19" r="3.5" fill="#10b981"/>
-      <text x="34" y="24" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">16–32px Fourier Decorr</text>
+      <text x="34" y="23.5" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">Multi-Frame Mask Inpaint</text>
     </g>
 
     <!-- Pill 4 -->
-    <g transform="translate(680, 0)">
-      <rect width="220" height="38" rx="10" fill="#0c0c0e" stroke="#262626" stroke-width="1"/>
+    <g transform="translate(713, 0)">
+      <rect width="227" height="38" rx="10" fill="#0c0c0e" stroke="#262626" stroke-width="1"/>
       <circle cx="20" cy="19" r="3.5" fill="#10b981"/>
-      <text x="34" y="24" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">Sub-150ms / Zero GPU</text>
+      <text x="34" y="23.5" font-family="Geist, Inter, -apple-system, sans-serif" font-size="12.5" fill="#f4f4f5" font-weight="600">C2PA &amp; SynthID Purge</text>
     </g>
   </g>
 
   <!-- Subtle bottom edge highlight -->
-  <line x1="200" y1="379" x2="1080" y2="379" stroke="#10b981" stroke-width="1" stroke-opacity="0.3"/>
+  <line x1="200" y1="379" x2="1080" y2="379" stroke="#10b981" stroke-width="1.5" stroke-opacity="0.35"/>
 </svg>
