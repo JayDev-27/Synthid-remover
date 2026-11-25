@@ -36,5 +36,9 @@ Synthid-remover/scripts/verify-pipeline.mjs
 
 ## Audit (2026-11-20)
 
-- `npm run lint` and `npm test` pass. The test skips the real-photo fixture because `public/hero-watermarked.jpg` was lost; add any watermarked photo there to run it.
-- `npm run build` fails until these UI files are restored: `app/components/ImageDropzone`, `app/components/ProcessingLogs`, `app/components/Navbar`, `app/components/ThemeProvider`, `app/globals.css`, and the `public/` folder.
+- Initial partial recovery skipped `public/hero-watermarked.jpg` and lacked `Navbar`, `ImageDropzone`, `ProcessingLogs`, `ThemeProvider`, `globals.css`, and `public/` assets.
+
+## Full Rebuild (2026-11-25)
+
+- Restored all UI components (`Navbar`, `ImageDropzone`, `ProcessingLogs`, `ThemeProvider`), `HeroImageScanner` integration in `app/page.tsx`, `app/globals.css`, `tailwind.config.js`, `LICENSE`, brand SVGs, `public/` hero/favicon assets, and `assets/` showcase media.
+- Removed the Fixture 2 skip in `scripts/verify-pipeline.mjs` so all pipeline and edge-case tests run against `public/hero-watermarked.jpg`.

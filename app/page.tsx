@@ -24,6 +24,7 @@ import {
 import { ImageDropzone } from './components/ImageDropzone';
 import { InpaintCanvas } from './components/InpaintCanvas';
 import { ProcessingLogs } from './components/ProcessingLogs';
+import { HeroImageScanner } from './components/HeroImageScanner';
 import { saveLocalJob } from '@/lib/localHistory';
 import { processImageClientSide, inpaintImageClientSide, DisruptionMode } from '@/lib/clientImageProcessor';
 
@@ -321,6 +322,10 @@ export default function LandingPage() {
               </div>
             </div>
 
+            {/* Live Interactive Hero Scanner */}
+            <div className="mt-14 w-full">
+              <HeroImageScanner />
+            </div>
           </div>
         </div>
       </section>
