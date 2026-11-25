@@ -1,14 +1,16 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { Upload, FileWarning, Lock } from 'lucide-react';
+import { Upload, FileWarning, Lock, Image as ImageIcon, Film, Video } from 'lucide-react';
 
 interface ImageDropzoneProps {
   onImageSelected: (file: File) => void;
   disabled?: boolean;
 }
 
-const MAX_FILE_SIZE_MB = 20;
+const MAX_IMAGE_SIZE_MB = 20;
+const MAX_GIF_SIZE_MB = 50;
+const MAX_VIDEO_SIZE_MB = 150;
 
 export const ImageDropzone: React.FC<ImageDropzoneProps> = ({ onImageSelected, disabled }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -18,15 +20,23 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({ onImageSelected, d
   const validateAndHandleFile = (file: File) => {
     setErrorMessage(null);
 
-    // Size validation
-    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-      setErrorMessage(`File exceeds the maximum size limit of ${MAX_FILE_SIZE_MB}MB.`);
+    const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
+    const isVideo =
+      file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+    const isImage =
+      !isGif &&
+      (file.type.startsWith('image/') || /\.(jpe?g|png|webp|avif|heic)$/i.test(file.name));
+
+    if (!isImage && !isGif && !isVideo) {
+      setErrorMessage(
+        'Unsupported file format. Please upload JPG, PNG, WEBP, AVIF, GIF, MP4, WEBM, or MOV.'
+      );
       return;
     }
 
-    // Format validation (allow standard image formats)
-    if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|avif|heic)$/i.test(file.name)) {
-      setErrorMessage('Unsupported file format. Please upload JPG, PNG, WEBP, or AVIF.');
+    const limitMb = isVideo ? MAX_VIDEO_SIZE_MB : isGif ? MAX_GIF_SIZE_MB : MAX_IMAGE_SIZE_MB;
+    if (file.size > limitMb * 1024 * 1024) {
+      setErrorMessage(`File exceeds the maximum size limit of ${limitMb}MB.`);
       return;
     }
 
@@ -80,7 +90,7 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({ onImageSelected, d
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp,image/avif,image/heic"
+          accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/gif,video/mp4,video/webm,video/quicktime,.gif,.mp4,.webm,.mov,.m4v"
           onChange={handleFileChange}
           className="hidden"
           disabled={disabled}
@@ -93,12 +103,28 @@ export const ImageDropzone: React.FC<ImageDropzoneProps> = ({ onImageSelected, d
 
         {/* Header Text */}
         <h3 className="mb-1 text-center font-sans text-base font-semibold tracking-tight text-black dark:text-white">
-          Drop an image here or click to browse
+          Drop an image, animated GIF, or video here or click to browse
         </h3>
 
         <p className="mb-4 text-center text-xs text-neutral-500 dark:text-neutral-400">
-          Supports JPG, PNG, WEBP, AVIF up to {MAX_FILE_SIZE_MB}MB
+          Supports JPG, PNG, WEBP, AVIF, GIF (up to {MAX_GIF_SIZE_MB}MB), and MP4/WEBM/MOV videos (up to {MAX_VIDEO_SIZE_MB}MB)
         </p>
+
+        {/* Supported Media Type Pills */}
+        <div className="mb-4 flex flex-wrap items-center justify-center gap-2 font-mono text-[11px] text-neutral-600 dark:text-neutral-400">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900 px-2.5 py-1">
+            <ImageIcon className="h-3 w-3" />
+            <span>Static Images</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900 px-2.5 py-1">
+            <Film className="h-3 w-3" />
+            <span>Animated GIFs</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900 px-2.5 py-1">
+            <Video className="h-3 w-3" />
+            <span>AI Videos (MP4/WebM)</span>
+          </span>
+        </div>
 
         <div className="inline-flex items-center gap-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900/80 px-3 py-1 font-mono text-[11px] text-neutral-600 dark:text-neutral-400">
           <Lock className="h-3 w-3" />

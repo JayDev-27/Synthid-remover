@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { GifWriter } from 'omggif';
 import {
   processImagePipeline,
   scanBufferProvenance,
@@ -6,6 +7,8 @@ import {
   applyInpaintMask,
   stripMetadata,
 } from '../lib/imageProcessor.ts';
+import { processGifBuffer, decodeGifToFrames } from '../lib/gifProcessor.ts';
+import { loadGeminiWatermarkRemoverSync, eraseGeminiSparklePixelData } from '../lib/pixelPipeline.ts';
 
 // ============================================================================
 // QA Test Harness & Statistics Collector
@@ -575,6 +578,251 @@ async function runProvenanceAuditSuite() {
 }
 
 // ============================================================================
+// Suite 8: GIF & Video Container Provenance Audit Matrix
+// ============================================================================
+async function runGifVideoProvenanceSuite() {
+  console.log('\n============================================================');
+  console.log('📌 SUITE 8: GIF & VIDEO PROVENANCE AUDIT MATRIX');
+  console.log('============================================================');
+
+  // 1. GIF with Comment Extension (0x21 0xFE) + XMP Application Extension (0x21 0xFF)
+  const rawGif = new Uint8Array(4096);
+  const gw = new GifWriter(rawGif, 4, 4, { palette: [0x000000, 0xffffff], loop: 0 });
+  gw.addFrame(0, 0, 4, 4, new Uint8Array(16), { delay: 10 });
+  const endPos = gw.end();
+  const baseGif = Buffer.from(rawGif.subarray(0, endPos - 1)); // Strip trailer 0x3B
+  const commentExt = Buffer.from([0x21, 0xfe, 11, ...Buffer.from('ai-gen-meta'), 0x00]);
+  const xmpExt = Buffer.from([0x21, 0xff, 11, ...Buffer.from('XMP DataXMP'), 0x00]);
+  const dirtyGif = Buffer.concat([baseGif, commentExt, xmpExt, Buffer.from([0x3b])]);
+
+  const gifScan = scanBufferProvenance(dirtyGif);
+  if (gifScan.formatDetected === 'GIF' && !gifScan.clean && gifScan.exifFound && gifScan.xmpFound) {
+    recordTest('Media Scanner', 'GIF Comment + XMP Extension Detection', 'PASS', {
+      metric: `Detected GIF, exif=${gifScan.exifFound}, xmp=${gifScan.xmpFound}`,
+    });
+  } else {
+    recordTest('Media Scanner', 'GIF Comment + XMP Extension Detection', 'FAIL', {
+      error: JSON.stringify(gifScan),
+    });
+  }
+
+  // 2. MP4 with ISO BMFF C2PA JUMBF uuid box + udta XMP metadata
+  const makeIsoBox = (type, payload) => {
+    const out = Buffer.alloc(8 + payload.length);
+    out.writeUInt32BE(out.length, 0);
+    out.write(type, 4, 4, 'ascii');
+    payload.copy(out, 8);
+    return out;
+  };
+  const ftyp = makeIsoBox('ftyp', Buffer.from('isom\x00\x00\x02\x00isom'));
+  const uuidC2pa = makeIsoBox(
+    'uuid',
+    Buffer.concat([
+      Buffer.from([0xd8, 0xfe, 0xc3, 0xd6, 0x1b, 0x0e, 0x48, 0x3c, 0x92, 0x97, 0x58, 0x28, 0x87, 0x7e, 0xc4, 0x81]),
+      Buffer.from('c2pa manifest'),
+    ])
+  );
+  const udtaXmp = makeIsoBox('udta', Buffer.from('http://ns.adobe.com/xap/1.0/ veo_generated'));
+  const moov = makeIsoBox('moov', udtaXmp);
+  const dirtyMp4 = Buffer.concat([ftyp, uuidC2pa, moov]);
+
+  const mp4Scan = scanBufferProvenance(dirtyMp4);
+  if (mp4Scan.formatDetected === 'MP4' && !mp4Scan.clean && mp4Scan.c2paFound && mp4Scan.xmpFound) {
+    recordTest('Media Scanner', 'MP4 JUMBF C2PA UUID + UDTA XMP Detection', 'PASS', {
+      metric: `Detected MP4, c2pa=${mp4Scan.c2paFound}, xmp=${mp4Scan.xmpFound}`,
+    });
+  } else {
+    recordTest('Media Scanner', 'MP4 JUMBF C2PA UUID + UDTA XMP Detection', 'FAIL', {
+      error: JSON.stringify(mp4Scan),
+    });
+  }
+
+  // 3. WebM EBML header with C2PA & XMP markers
+  const dirtyWebm = Buffer.concat([
+    Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x93, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x84]),
+    Buffer.from('webm'),
+    Buffer.from('C2PA_ContentCredentials http://ns.adobe.com/xap/'),
+  ]);
+  const webmScan = scanBufferProvenance(dirtyWebm);
+  if (webmScan.formatDetected === 'WEBM' && !webmScan.clean && webmScan.c2paFound && webmScan.xmpFound) {
+    recordTest('Media Scanner', 'WebM EBML C2PA + XMP Detection', 'PASS', {
+      metric: `Detected WEBM, c2pa=${webmScan.c2paFound}, xmp=${webmScan.xmpFound}`,
+    });
+  } else {
+    recordTest('Media Scanner', 'WebM EBML C2PA + XMP Detection', 'FAIL', {
+      error: JSON.stringify(webmScan),
+    });
+  }
+}
+
+// ============================================================================
+// Suite 9: Multi-Frame Animated GIF Watermark & Brush Mask Pipeline
+// ============================================================================
+async function runGifPipelineSuite() {
+  console.log('\n============================================================');
+  console.log('📌 SUITE 9: ANIMATED GIF MULTI-FRAME WATERMARK PIPELINE');
+  console.log('============================================================');
+
+  const w = 120;
+  const h = 90;
+  const frameCount = 4;
+  // Palette: 0=blue bg (0x0044dd), 1=white watermark rect (0xffffff), 2=accent stripe (0xffaa00)
+  const palette = [0x0044dd, 0xffffff, 0xffaa00, 0x000000];
+  const rawBuf = new Uint8Array(512 * 1024);
+  const writer = new GifWriter(rawBuf, w, h, { palette, loop: 0 });
+
+  for (let f = 0; f < frameCount; f++) {
+    const indexed = new Uint8Array(w * h);
+    indexed.fill(0);
+    // Moving orange square + fixed white watermark box at (40..60, 30..50)
+    for (let y = 10 + f * 4; y < 22 + f * 4; y++) {
+      for (let x = 10 + f * 5; x < 22 + f * 5; x++) {
+        indexed[y * w + x] = 2;
+      }
+    }
+    for (let y = 30; y < 50; y++) {
+      for (let x = 40; x < 60; x++) {
+        indexed[y * w + x] = 1;
+      }
+    }
+    writer.addFrame(0, 0, w, h, indexed, { delay: 10 });
+  }
+  const gwEnd = writer.end();
+  const cleanBody = Buffer.from(rawBuf.subarray(0, gwEnd - 1));
+  const dirtyGif = Buffer.concat([
+    cleanBody,
+    Buffer.from([0x21, 0xfe, 8, ...Buffer.from('veo-meta'), 0x00]),
+    Buffer.from([0x3b]),
+  ]);
+
+  // 9A. Balanced mode strips metadata while preserving all 4 frames & timing
+  const autoRes = await processGifBuffer(dirtyGif, {
+    disruptionMode: 'balanced',
+    removeVisibleBadge: false,
+    disruptSignals: true,
+    stripMetadata: true,
+  });
+
+  const decodedAuto = decodeGifToFrames(autoRes.bytes);
+  if (
+    autoRes.telemetry.frameCount === 4 &&
+    decodedAuto.frames.length === 4 &&
+    decodedAuto.frames[0].delay === 10 &&
+    autoRes.telemetry.provenanceAudit.formatDetected === 'GIF' &&
+    autoRes.telemetry.provenanceAudit.clean
+  ) {
+    recordTest('GIF Pipeline', '4-Frame Scrubbing + Metadata Purge + Timing Preservation', 'PASS', {
+      metric: `Frames: ${decodedAuto.frames.length}/4, Delay: ${decodedAuto.frames[0].delay}cs, Clean: true`,
+    });
+  } else {
+    recordTest('GIF Pipeline', '4-Frame Scrubbing + Metadata Purge + Timing Preservation', 'FAIL', {
+      error: `frames=${decodedAuto.frames.length}, clean=${autoRes.telemetry.provenanceAudit.clean}`,
+    });
+  }
+
+  // 9B. Visual Brush Inpaint mask propagated cleanly across ALL 4 frames
+  const maskRgba = new Uint8ClampedArray(w * h * 4);
+  for (let y = 28; y <= 52; y++) {
+    for (let x = 38; x <= 62; x++) {
+      const p = (y * w + x) * 4;
+      maskRgba[p] = 255;
+      maskRgba[p + 1] = 255;
+      maskRgba[p + 2] = 255;
+      maskRgba[p + 3] = 255;
+    }
+  }
+
+  const inpaintRes = await processGifBuffer(dirtyGif, {
+    disruptionMode: 'balanced',
+    disruptSignals: false,
+    removeVisibleBadge: false,
+    maskRgba: { width: w, height: h, data: maskRgba },
+  });
+
+  const decodedInpaint = decodeGifToFrames(inpaintRes.bytes);
+  let allFramesRepaired = decodedInpaint.frames.length === 4;
+  let maxResidualR = 0;
+  for (const fr of decodedInpaint.frames) {
+    const centerIdx = (40 * w + 50) * 4; // Inside white box
+    const r = fr.rgba[centerIdx];
+    const b = fr.rgba[centerIdx + 2];
+    if (r > maxResidualR) maxResidualR = r;
+    if (r > 60 || b < 170) allFramesRepaired = false;
+  }
+
+  if (allFramesRepaired && inpaintRes.telemetry.maskApplied && inpaintRes.telemetry.provenanceAudit.clean) {
+    recordTest('GIF Pipeline', 'Multi-Frame Visual Brush Inpaint Propagation (All 4 Frames)', 'PASS', {
+      metric: `Center watermark erased across all 4 frames (max residual R=${maxResidualR})`,
+    });
+  } else {
+    recordTest('GIF Pipeline', 'Multi-Frame Visual Brush Inpaint Propagation (All 4 Frames)', 'FAIL', {
+      error: `allFramesRepaired=${allFramesRepaired}, maxR=${maxResidualR}`,
+    });
+  }
+}
+
+// ============================================================================
+// Suite 10: Off-Grid / 16:9 Cropped Gemini Sparkle Rescue Verification
+// ============================================================================
+async function runSparkleRescueSuite() {
+  console.log('\n============================================================');
+  console.log('📌 SUITE 10: OFF-GRID 16:9 SPARKLE RESCUE DISCRIMINATOR');
+  console.log('============================================================');
+
+  const removerFn = await loadGeminiWatermarkRemoverSync();
+  const { createWatermarkEngine } = await import('@pilio/gemini-watermark-remover/image-data');
+  const engine = await createWatermarkEngine();
+  const alpha24 = await engine.getAlphaMap(24);
+
+  const w = 320;
+  const h = 180;
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const x = i % w;
+    // Split yellow artwork left edge against dark background (reproducing cropped thumbnail edge case)
+    const p = i * 4;
+    if (x < 262) {
+      rgba[p] = 240; rgba[p + 1] = 215; rgba[p + 2] = 90; rgba[p + 3] = 255;
+    } else {
+      rgba[p] = 0; rgba[p + 1] = 0; rgba[p + 2] = 0; rgba[p + 3] = 255;
+    }
+  }
+
+  // Blend 24x24 star at non-standard offset (x0=251, y0=111) straddling the yellow/black edge
+  const x0 = 251;
+  const y0 = 111;
+  for (let dy = 0; dy < 24; dy++) {
+    for (let dx = 0; dx < 24; dx++) {
+      const a = Math.min(0.85, alpha24[dy * 24 + dx] * 0.78);
+      if (a <= 0.01) continue;
+      const p = ((y0 + dy) * w + (x0 + dx)) * 4;
+      for (let c = 0; c < 3; c++) {
+        rgba[p + c] = Math.round(rgba[p + c] * (1 - a) + 255 * a);
+      }
+    }
+  }
+
+  const centerP = ((y0 + 12) * w + (x0 + 12)) * 4; // Sits over dark side (x=263 >= 262)
+  const beforeLum = rgba[centerP];
+
+  const meta = eraseGeminiSparklePixelData(rgba, w, h, {
+    removerSyncFn: removerFn,
+    forceRescue: true,
+  });
+
+  const afterLum = rgba[centerP];
+  if (meta.applied && meta.rescueApplied && beforeLum > 60 && afterLum < 15) {
+    recordTest('Sparkle Rescue', 'Off-Grid 16:9 Edge-Straddling Star Detection & Unblending', 'PASS', {
+      metric: `Star center restored from luma ${beforeLum} -> ${afterLum} (tier: ${meta.decisionTier})`,
+    });
+  } else {
+    recordTest('Sparkle Rescue', 'Off-Grid 16:9 Edge-Straddling Star Detection & Unblending', 'FAIL', {
+      error: `before=${beforeLum}, after=${afterLum}, meta=${JSON.stringify(meta)}`,
+    });
+  }
+}
+
+// ============================================================================
 // Main Suite Runner & Executive Summary
 // ============================================================================
 async function runAllEdgeCases() {
@@ -591,6 +839,9 @@ async function runAllEdgeCases() {
   await runMetadataLosslessSuite();
   await runCorruptInputsSuite();
   await runProvenanceAuditSuite();
+  await runGifVideoProvenanceSuite();
+  await runGifPipelineSuite();
+  await runSparkleRescueSuite();
 
   const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
 
@@ -617,10 +868,8 @@ async function runAllEdgeCases() {
 
 runAllEdgeCases()
   .then((res) => {
-    // Return non-zero only if unexpected failures occur beyond the known edge case bugs
-    const expectedFailures = 1; // 1x1 aggressive mode median(3)
-    if (res.failed > expectedFailures) {
-      console.error(`\n❌ Suite finished with ${res.failed} failures (expected at most ${expectedFailures}).`);
+    if (res.failed > 0) {
+      console.error(`\n❌ Suite finished with ${res.failed} failure(s).`);
       process.exit(1);
     } else {
       console.log('\n✨ Suite completed analysis successfully.');

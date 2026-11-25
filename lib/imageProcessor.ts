@@ -1,6 +1,9 @@
 import sharp from 'sharp';
+import { scanUint8ArrayProvenance, ProvenanceAuditResult } from './provenanceScanner';
+import { loadGeminiWatermarkRemoverSync, eraseGeminiSparklePixelData } from './pixelPipeline';
 
 export type DisruptionMode = 'balanced' | 'aggressive' | 'metadata-only';
+export type { ProvenanceAuditResult };
 
 export interface ImageProcessingOptions {
   stripMetadata?: boolean;
@@ -10,17 +13,6 @@ export interface ImageProcessingOptions {
   removeVisibleBadge?: boolean;
   targetFormat?: 'jpeg' | 'png' | 'webp';
   quality?: number;
-}
-
-export interface ProvenanceAuditResult {
-  c2paFound: boolean;
-  exifFound: boolean;
-  xmpFound: boolean;
-  iccFound: boolean;
-  iptcFound: boolean;
-  clean: boolean;
-  bytesScanned: number;
-  formatDetected: string;
 }
 
 export interface ProcessingTelemetry {
@@ -43,89 +35,10 @@ export interface ProcessingTelemetry {
 
 /**
  * Forensic byte-level provenance chunk scanner.
- * Scans binary chunks/markers across PNG, JPEG, and WebP containers to verify that
- * zero C2PA manifests, EXIF headers, XMP schemas, ICC profiles, or IPTC blocks exist.
+ * Delegates to the unified binary scanner covering PNG, JPEG, WebP, GIF, MP4/MOV, and WebM containers.
  */
 export function scanBufferProvenance(buf: Buffer): ProvenanceAuditResult {
-  let c2pa = false;
-  let exif = false;
-  let xmp = false;
-  let icc = false;
-  let iptc = false;
-  let format = 'unknown';
-
-  // Check PNG signature: 89 50 4E 47 0D 0A 1A 0A
-  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-    format = 'PNG';
-    let offset = 8;
-    while (offset + 8 <= buf.length) {
-      const length = buf.readUInt32BE(offset);
-      const type = buf.toString('ascii', offset + 4, offset + 8);
-      const chunkData = buf.subarray(offset + 8, Math.min(buf.length, offset + 8 + length));
-
-      if (type === 'caBX') c2pa = true; // ISO/C2PA standard PNG chunk
-      if (type === 'eXIf') exif = true;
-      if (type === 'iCCP') icc = true;
-      if (type === 'iTXt' || type === 'tEXt' || type === 'zTXt') {
-        const text = chunkData.toString('utf-8', 0, Math.min(chunkData.length, 120));
-        if (/c2pa|contentcredentials/i.test(text)) c2pa = true;
-        if (/xmp|ns\.adobe/i.test(text)) xmp = true;
-        if (/exif/i.test(text)) exif = true;
-        if (/iptc/i.test(text)) iptc = true;
-      }
-      offset += 12 + length;
-    }
-  }
-
-  // Check JPEG SOI marker: FF D8
-  else if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xD8) {
-    format = 'JPEG';
-    let offset = 2;
-    while (offset + 4 <= buf.length) {
-      if (buf[offset] !== 0xFF) break;
-      const marker = buf[offset + 1];
-      if (marker === 0xDA || marker === 0xD9) break; // SOS or EOI
-      const len = buf.readUInt16BE(offset + 2);
-
-      if (marker === 0xE1) { // APP1 (Exif or XMP)
-        const payload = buf.toString('ascii', offset + 4, Math.min(buf.length, offset + 4 + Math.min(len - 2, 40)));
-        if (payload.startsWith('Exif')) exif = true;
-        if (payload.includes('ns.adobe.com') || payload.includes('XMP')) xmp = true;
-      }
-      if (marker === 0xE2) icc = true; // APP2 (ICC profile / MPF)
-      if (marker === 0xED) iptc = true; // APP13 (Photoshop / IPTC)
-      if (marker === 0xEB) c2pa = true; // APP11 (JUMBF / C2PA)
-
-      offset += 2 + len;
-    }
-  }
-
-  // Check WebP signature: RIFF ... WEBP
-  else if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
-    format = 'WEBP';
-    let offset = 12;
-    while (offset + 8 <= buf.length) {
-      const chunkId = buf.toString('ascii', offset, offset + 4);
-      const chunkLen = buf.readUInt32LE(offset + 4);
-
-      if (chunkId === 'EXIF') exif = true;
-      if (chunkId === 'XMP ') xmp = true;
-      if (chunkId === 'ICCP') icc = true;
-
-      offset += 8 + chunkLen + (chunkLen % 2);
-    }
-  }
-
-  return {
-    c2paFound: c2pa,
-    exifFound: exif,
-    xmpFound: xmp,
-    iccFound: icc,
-    iptcFound: iptc,
-    clean: !c2pa && !exif && !xmp && !icc && !iptc,
-    bytesScanned: buf.length,
-    formatDetected: format,
-  };
+  return scanUint8ArrayProvenance(buf);
 }
 
 /**
@@ -713,32 +626,26 @@ export async function applyInpaintMask(
  */
 export async function removeCornerBadge(inputBuffer: Buffer): Promise<{ buffer: Buffer; meta?: any }> {
   try {
-    const { removeWatermarkFromImageDataSync } = await import('@pilio/gemini-watermark-remover/image-data');
+    const removerFn = await loadGeminiWatermarkRemoverSync();
 
     const { data: rawPixels, info } = await sharp(inputBuffer)
       .ensureAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    const imageData = {
-      width: info.width,
-      height: info.height,
-      data: new Uint8ClampedArray(rawPixels.buffer, rawPixels.byteOffset, rawPixels.byteLength),
-    };
-
-    const result = removeWatermarkFromImageDataSync(imageData, {
-      adaptiveMode: 'always',
-      aggressiveLocatedFallback: true,
-      locatedAggressiveRemoval: true,
+    const rgba = new Uint8ClampedArray(rawPixels.buffer, rawPixels.byteOffset, rawPixels.byteLength);
+    const meta = eraseGeminiSparklePixelData(rgba, info.width, info.height, {
+      removerSyncFn: removerFn,
+      forceRescue: true,
     });
 
-    if (result && result.imageData) {
+    if (meta.applied) {
       const cleanBuffer = await sharp(
-        Buffer.from(result.imageData.data.buffer, result.imageData.data.byteOffset, result.imageData.data.byteLength),
+        Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength),
         {
           raw: {
-            width: result.imageData.width,
-            height: result.imageData.height,
+            width: info.width,
+            height: info.height,
             channels: 4,
           },
         }
@@ -748,10 +655,10 @@ export async function removeCornerBadge(inputBuffer: Buffer): Promise<{ buffer: 
 
       return {
         buffer: cleanBuffer,
-        meta: result.meta,
+        meta,
       };
     }
-    return { buffer: inputBuffer };
+    return { buffer: inputBuffer, meta };
   } catch (err) {
     console.error('Gemini watermark removal error:', err);
     return { buffer: inputBuffer };

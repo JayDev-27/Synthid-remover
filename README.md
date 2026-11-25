@@ -48,10 +48,10 @@ Try the interactive browser application right now on GitHub Pages:
 ## ✨ Why SynthID Remover
 
 - 🔒 **100% Private & Client-Side Execution.** All processing executes in browser memory or local Node.js processes. No telemetry, no logs, and zero network payloads leave your machine.
-- 🎯 **Cryptographic Provenance Annihilation.** Extracts raw RGBA pixel arrays and synthesizes fresh binary containers from scratch, deterministically purging C2PA (`JUMBF`, `caBX`, `APP11`), EXIF, XMP, and IPTC manifests.
+- 🎬 **Images, Animated GIFs & Videos.** Scrubs static images (`JPG`, `PNG`, `WEBP`, `AVIF`, `HEIC`), multi-frame animated **GIFs** (`omggif`), and **MP4 / WebM / MOV videos** (browser-native WebCodecs + `mp4-muxer`/`webm-muxer` with audio preservation and automatic `MediaRecorder` fallback).
+- 🎯 **Cryptographic Provenance Annihilation.** Extracts raw pixel buffers and synthesizes fresh binary containers from scratch, deterministically purging C2PA (`JUMBF`, `caBX`, `APP11`), EXIF, XMP, GIF comment/XMP extensions, and MP4/WebM metadata boxes.
 - 🔬 **Bounded Fourier Frequency Phase Scrambler.** Isolates the steganographic $16 \le \lambda \le 32$ px carrier wave band in Luminance ($Y$) and scrambles phase angles with a $\tanh$ delta clamp to evade neural detectors (OpenAI & SynthID verifiers) without blurring structural edges.
-- ⚡ **Sub-150ms Speed (No GPU Required).** Avoids heavy 20–60 second generative diffusion redraws (DeSynth, ComfyUI) that require 12GB+ VRAM and hallucinate details. SynthID Remover is deterministic, instant, and runs on any CPU.
-- 🛡️ **Adaptive Reverse Alpha Blending.** Detects and removes visible Gemini / Imagen sparkles and badges (48px, 96px, outline, and custom coordinates) with neighborhood diffusion falloff.
+- 🛡️ **Adaptive Reverse Alpha Blending + Off-Grid Rescue.** Erases visible corner sparkles and cropped/16:9 off-grid stars with reverse alpha unblending across images, GIF frames, and video streams, plus multi-frame **Visual Brush Inpaint** propagation.
 - 💎 **Bit-for-Bit Lossless Mode.** Includes a Metadata-Only mode that leaves pixel values untouched ($\infty$ dB PSNR, 0.00 MSE) for provenance stripping in quality-critical workflows.
 
 ---
@@ -329,12 +329,13 @@ Or upload the resulting image to the Content Authenticity Initiative inspector a
 - [x] Client-side 100% local Canvas 2D & TypedArray processing pipeline
 - [x] Automated C2PA (`JUMBF`/`APP11`), EXIF, XMP & IPTC container stripper
 - [x] Multi-band Luminance Fourier phase scrambler ($16 \le \lambda \le 32$ px)
-- [x] Adaptive Gemini visible watermark eraser (48px, 96px, outline)
+- [x] Adaptive Gemini visible watermark eraser (48px, 96px, outline, & off-grid 16:9 rescue)
+- [x] Animated GIF multi-frame disposal, scrubbing & Visual Brush Inpaint propagation
+- [x] Client-side MP4 / WebM / MOV video watermark removal with WebCodecs + clean container muxing
 - [x] Bit-for-bit lossless metadata-only export mode
-- [x] Automated regression suite (`npm test`) with PSNR / MSE telemetry
+- [x] Automated regression suite (`npm test` & `npm run test:edge` with 60 assertions)
 - [ ] WebAssembly (Wasm) SIMD-accelerated FFT for instant 4K browser processing
 - [ ] Standalone batch folder CLI utility for automated library-wide cleaning
-- [ ] Video steganography disruption (AV1 / H.265 frame-domain processing)
 
 ---
 

@@ -1,6 +1,17 @@
-import { removeWatermarkFromImageDataSync } from '@pilio/gemini-watermark-remover/image-data';
+import { scanBase64Provenance, ProvenanceAuditResult } from './provenanceScanner';
+import {
+  loadGeminiWatermarkRemoverSync,
+  eraseGeminiSparklePixelData,
+  applyBilateralCarrierDisruptionRgba,
+  applyMedianFilter3x3Rgba,
+  inpaintMaskOnRgba,
+  DisruptionMode,
+  WatermarkCornerPreset,
+} from './pixelPipeline';
 
-export type DisruptionMode = 'balanced' | 'aggressive' | 'metadata-only';
+export type { DisruptionMode, WatermarkCornerPreset };
+export { scanBase64Provenance };
+export type ClientProvenanceAudit = ProvenanceAuditResult;
 
 export interface ClientProcessingOptions {
   stripMetadata?: boolean;
@@ -8,208 +19,9 @@ export interface ClientProcessingOptions {
   disruptionMode?: DisruptionMode;
   disruptionStrength?: number; // 1 to 100, default: 75
   removeVisibleBadge?: boolean;
+  cornerHint?: WatermarkCornerPreset;
   format?: 'png' | 'jpeg' | 'webp';
   quality?: number;
-}
-
-export interface ClientProvenanceAudit {
-  c2paFound: boolean;
-  exifFound: boolean;
-  xmpFound: boolean;
-  iccFound: boolean;
-  iptcFound: boolean;
-  clean: boolean;
-  bytesScanned: number;
-  formatDetected: string;
-}
-
-/**
- * Forensic byte-level scanner on client-side base64 image strings.
- * Verifies that zero C2PA (caBX / JUMBF), EXIF, XMP, ICC, or IPTC chunks survive.
- */
-export function scanBase64Provenance(base64Data: string): ClientProvenanceAudit {
-  const binaryString = atob(base64Data.split(',')[1] || '');
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-
-  let c2pa = false;
-  let exif = false;
-  let xmp = false;
-  let icc = false;
-  let iptc = false;
-  let format = 'unknown';
-
-  // PNG
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
-    format = 'PNG';
-    let offset = 8;
-    while (offset + 8 <= bytes.length) {
-      const chunkLen = (((bytes[offset] << 24) >>> 0) + (bytes[offset + 1] << 16) + (bytes[offset + 2] << 8) + bytes[offset + 3]) >>> 0;
-      const chunkType = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-
-      if (chunkType === 'caBX') c2pa = true;
-      if (chunkType === 'eXIf') exif = true;
-      if (chunkType === 'iCCP') icc = true;
-      if (chunkType === 'iTXt' || chunkType === 'tEXt' || chunkType === 'zTXt') {
-        let chunkText = '';
-        const maxText = Math.min(bytes.length, offset + 8 + Math.min(chunkLen, 120));
-        for (let j = offset + 8; j < maxText; j++) {
-          chunkText += String.fromCharCode(bytes[j]);
-        }
-        if (/c2pa|contentcredentials/i.test(chunkText)) c2pa = true;
-        if (/xmp|ns\.adobe/i.test(chunkText)) xmp = true;
-        if (/exif/i.test(chunkText)) exif = true;
-        if (/iptc/i.test(chunkText)) iptc = true;
-      }
-      offset += 12 + chunkLen;
-    }
-  }
-  // JPEG
-  else if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-    format = 'JPEG';
-    let offset = 2;
-    while (offset + 4 <= bytes.length) {
-      if (bytes[offset] !== 0xff) break;
-      const marker = bytes[offset + 1];
-      if (marker === 0xda || marker === 0xd9) break;
-      const markerLen = (bytes[offset + 2] << 8) | bytes[offset + 3];
-      if (markerLen < 2) break;
-
-      if (marker === 0xe1) {
-        let payload = '';
-        const maxP = Math.min(bytes.length, offset + 4 + Math.min(markerLen - 2, 40));
-        for (let j = offset + 4; j < maxP; j++) {
-          payload += String.fromCharCode(bytes[j]);
-        }
-        if (payload.startsWith('Exif')) exif = true;
-        if (payload.includes('ns.adobe.com') || payload.includes('XMP')) xmp = true;
-      }
-      if (marker === 0xe2) icc = true;
-      if (marker === 0xed) iptc = true;
-      if (marker === 0xeb) c2pa = true;
-
-      offset += 2 + markerLen;
-    }
-  }
-  // WebP
-  else if (bytes.length >= 12 && String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === 'RIFF') {
-    format = 'WEBP';
-    let offset = 12;
-    while (offset + 8 <= bytes.length) {
-      const chunkId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
-      const chunkLen = (bytes[offset + 4] | (bytes[offset + 5] << 8) | (bytes[offset + 6] << 16) | ((bytes[offset + 7] << 24) >>> 0)) >>> 0;
-
-      if (chunkId === 'EXIF') exif = true;
-      if (chunkId === 'XMP ') xmp = true;
-      if (chunkId === 'ICCP') icc = true;
-
-      offset += 8 + chunkLen + (chunkLen % 2);
-    }
-  }
-
-  return {
-    c2paFound: c2pa,
-    exifFound: exif,
-    xmpFound: xmp,
-    iccFound: icc,
-    iptcFound: iptc,
-    clean: !c2pa && !exif && !xmp && !icc && !iptc,
-    bytesScanned: bytes.length,
-    formatDetected: format,
-  };
-}
-
-/**
- * Fast client-side gradient-adaptive range-weighted bilateral filter on ImageData.
- * Extinguishes low-amplitude steganographic carrier ripples in smooth regions (skies, sunsets, water)
- * with a precomputed Gaussian LUT, while strictly preserving high-contrast visual edges.
- */
-function applyBilateralCarrierDisruptionClient(
-  imageData: ImageData,
-  sigmaR: number,
-  noiseScale: number,
-  mode: DisruptionMode
-): { output: ImageData; hasTransparency: boolean } {
-  const { width: w, height: h, data: src } = imageData;
-  const output = new ImageData(w, h);
-  const dst = output.data;
-  dst.set(src);
-
-  const lut = new Float32Array(768);
-  const denom = 2 * sigmaR * sigmaR;
-  for (let d = 0; d < 768; d++) {
-    lut[d] = Math.exp(-(d * d) / denom);
-  }
-
-  const ditherProb = mode === 'aggressive' ? 0.70 : 0.50;
-  let hasTransparency = false;
-
-  for (let y = 1; y < h - 1; y++) {
-    const rowOffset = y * w * 4;
-    for (let x = 1; x < w - 1; x++) {
-      const idx = rowOffset + x * 4;
-      if (src[idx + 3] < 255) {
-        hasTransparency = true;
-      }
-
-      const r = src[idx];
-      const g = src[idx + 1];
-      const b = src[idx + 2];
-
-      let sumR = 0, sumG = 0, sumB = 0, totalW = 0;
-
-      for (let dy = -1; dy <= 1; dy++) {
-        const nRow = (y + dy) * w * 4;
-        for (let dx = -1; dx <= 1; dx++) {
-          const nIdx = nRow + (x + dx) * 4;
-          const nr = src[nIdx];
-          const ng = src[nIdx + 1];
-          const nb = src[nIdx + 2];
-
-          const diff = Math.abs(r - nr) + Math.abs(g - ng) + Math.abs(b - nb);
-          const weight = lut[diff];
-
-          sumR += nr * weight;
-          sumG += ng * weight;
-          sumB += nb * weight;
-          totalW += weight;
-        }
-      }
-
-      const invW = 1.0 / totalW;
-      let outR = sumR * invW;
-      let outG = sumG * invW;
-      let outB = sumB * invW;
-
-      // Multi-band chrominance and luminance phase dither
-      if (Math.random() < ditherProb) {
-        const jChroma = (Math.random() - 0.5) * noiseScale;
-        const jLuma = (Math.random() - 0.5) * (noiseScale * (mode === 'aggressive' ? 0.55 : 0.35));
-        outR = Math.min(255, Math.max(0, outR + jChroma + jLuma));
-        outG = Math.min(255, Math.max(0, outG + jLuma));
-        outB = Math.min(255, Math.max(0, outB - jChroma + jLuma));
-      }
-
-      dst[idx] = Math.round(outR);
-      dst[idx + 1] = Math.round(outG);
-      dst[idx + 2] = Math.round(outB);
-    }
-  }
-
-  // Check border pixels for transparency
-  if (!hasTransparency) {
-    for (let i = 3; i < src.length; i += 64) {
-      if (src[i] < 255) {
-        hasTransparency = true;
-        break;
-      }
-    }
-  }
-
-  return { output, hasTransparency };
 }
 
 /**
@@ -361,47 +173,6 @@ function applyBoundedFourierScrambleClient(
   return output;
 }
 
-/**
- * Fast client-side 3x3 median order-statistic filter on ImageData.
- * Eliminates steganographic outlier noise without blurring sharp image edges.
- */
-function applyMedianFilter3x3(imageData: ImageData): ImageData {
-  const { width: w, height: h, data: src } = imageData;
-  const output = new ImageData(w, h);
-  const dst = output.data;
-  dst.set(src); // Copy baseline (including borders)
-
-  const winR = new Uint8Array(9);
-  const winG = new Uint8Array(9);
-  const winB = new Uint8Array(9);
-
-  for (let y = 1; y < h - 1; y++) {
-    const rowOffset = y * w * 4;
-    for (let x = 1; x < w - 1; x++) {
-      let k = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        const srcOffset = (y + dy) * w * 4 + (x - 1) * 4;
-        for (let dx = 0; dx < 3; dx++) {
-          const idx = srcOffset + dx * 4;
-          winR[k] = src[idx];
-          winG[k] = src[idx + 1];
-          winB[k] = src[idx + 2];
-          k++;
-        }
-      }
-      const dstIdx = rowOffset + x * 4;
-      winR.sort();
-      winG.sort();
-      winB.sort();
-      dst[dstIdx] = winR[4];
-      dst[dstIdx + 1] = winG[4];
-      dst[dstIdx + 2] = winB[4];
-      // preserve alpha as-is
-    }
-  }
-  return output;
-}
-
 export async function processImageClientSide(
   file: File,
   options: ClientProcessingOptions = {}
@@ -436,19 +207,19 @@ export async function processImageClientSide(
 
   logs.push(`[CLIENT] Image dimensions: ${canvas.width}x${canvas.height}px | Mode: ${disruptionMode.toUpperCase()}`);
 
-  // 1. Erase Gemini Sparkle Watermark via Reverse Alpha Blending
+  // 1. Erase Gemini Sparkle Watermark via Reverse Alpha Blending + Off-Grid Rescue
   if (shouldRemoveBadge) {
     logs.push(`[PROCESS] Auto-erasing visible Gemini sparkle watermark with adaptive fallback...`);
     try {
-      const result = removeWatermarkFromImageDataSync(imageData, {
-        adaptiveMode: 'always',
-        aggressiveLocatedFallback: true,
-        locatedAggressiveRemoval: true,
+      const removerFn = await loadGeminiWatermarkRemoverSync();
+      const badgeMeta = eraseGeminiSparklePixelData(imageData.data, canvas.width, canvas.height, {
+        removerSyncFn: removerFn,
+        cornerHint: options.cornerHint || 'auto',
+        forceRescue: true,
       });
-      if (result && result.imageData) {
-        imageData = result.imageData as ImageData;
+      if (badgeMeta.applied) {
         ctx.putImageData(imageData, 0, 0);
-        logs.push(`[SUCCESS] Gemini sparkle badge removed via Reverse Alpha Blending (Tier: ${result.meta?.decisionTier || 'auto'}).`);
+        logs.push(`[SUCCESS] Gemini sparkle badge removed via Reverse Alpha Blending (Tier: ${badgeMeta.decisionTier || 'auto'}).`);
       }
     } catch (err) {
       console.warn('Client watermark removal warning:', err);
@@ -462,30 +233,28 @@ export async function processImageClientSide(
   if (options.disruptSignals !== false && !isMetadataOnly) {
     logs.push(`[PROCESS] Initializing ${disruptionMode.toUpperCase()} frequency disruption (Strength: ${disruptionStrength}%)...`);
 
-    // Step 2A: Bounded 16-32 px Fourier Phase Scramble on Luminance (Y)
-    // Decorrelates SynthID carrier phase while softly clamping spatial delta to prevent mottling.
     if (disruptionMode === 'aggressive') {
       const maxDelta = (disruptionStrength / 100) * 2.8;
       imageData = applyBoundedFourierScrambleClient(imageData, maxDelta);
       logs.push(`[PROCESS] Bounded 16-32px Fourier phase scrambler applied (maxDelta: ±${maxDelta.toFixed(1)}).`);
     }
 
-    // Step 2B: Gradient-Adaptive Bilateral Carrier Disruption & Multi-Band Phase Decorrelation
-    // Suppresses low-amplitude carrier ripples in continuous-tone regions (skies, sunsets, water)
     const sigmaR = disruptionMode === 'aggressive' ? 18 : 14;
     const noiseScale = disruptionMode === 'aggressive' ? (disruptionStrength / 100) * 1.8 : (disruptionStrength / 100) * 1.4;
-    const { output: bilateralData, hasTransparency } = applyBilateralCarrierDisruptionClient(
-      imageData,
+    const { output: bilateralBytes, hasTransparency } = applyBilateralCarrierDisruptionRgba(
+      imageData.data,
+      canvas.width,
+      canvas.height,
       sigmaR,
       noiseScale,
       disruptionMode
     );
-    imageData = bilateralData;
+    imageData.data.set(bilateralBytes);
     logs.push(`[PROCESS] Gradient-adaptive bilateral carrier smoothing applied (flat-field carrier suppressed).`);
 
-    // Step 2C: Non-linear 3x3 Median Filter (Crushes Steganographic Outlier Noise)
     if (disruptionMode === 'aggressive') {
-      imageData = applyMedianFilter3x3(imageData);
+      const medianBytes = applyMedianFilter3x3Rgba(imageData.data, canvas.width, canvas.height);
+      imageData.data.set(medianBytes);
       logs.push(`[PROCESS] 3x3 median order-statistic spatial filter applied (outlier noise crushed).`);
     }
     ctx.putImageData(imageData, 0, 0);
@@ -633,89 +402,7 @@ export async function inpaintImageClientSide(
   const maskData = maskCtx.getImageData(0, 0, width, height);
 
   logs.push(`[CLIENT INPAINT] Analyzing mask coordinates and neighborhood boundaries...`);
-
-  // Iterative neighborhood diffusion
-  const src = imgData.data;
-  const mask = maskData.data;
-
-  // Find bounding box of mask to speed up processing
-  let minX = width, maxX = 0, minY = height, maxY = 0;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = (y * width + x) * 4;
-      if (mask[idx + 3] > 20 && mask[idx] > 20) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-    }
-  }
-
-  const pad = 12;
-  minX = Math.max(0, minX - pad);
-  minY = Math.max(0, minY - pad);
-  maxX = Math.min(width - 1, maxX + pad);
-  maxY = Math.min(height - 1, maxY + pad);
-
-  // Track resolved status for pixels: 1 = masked (unresolved), 0 = known / resolved
-  const resolved = new Uint8Array(width * height);
-  let totalMasked = 0;
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      const idx = (y * width + x) * 4;
-      if (mask[idx + 3] > 30 && mask[idx] > 30) {
-        resolved[y * width + x] = 1;
-        totalMasked++;
-      }
-    }
-  }
-
-  const maskRadius = Math.max((maxX - minX), (maxY - minY)) / 2;
-  const passes = Math.max(6, Math.min(32, Math.ceil(maskRadius / 2)));
-
-  // Multi-pass boundary pixel diffusion with propagation
-  for (let pass = 0; pass < passes && totalMasked > 0; pass++) {
-    const newlyResolved: number[] = [];
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        const coord = y * width + x;
-        if (resolved[coord] === 1) {
-          let rSum = 0, gSum = 0, bSum = 0, count = 0;
-          const radius = 3;
-          for (let dy = -radius; dy <= radius; dy++) {
-            const ny = y + dy;
-            if (ny < 0 || ny >= height) continue;
-            for (let dx = -radius; dx <= radius; dx++) {
-              const nx = x + dx;
-              if (nx < 0 || nx >= width) continue;
-              const nCoord = ny * width + nx;
-              if (resolved[nCoord] === 0) {
-                const weight = 1 / (1 + Math.hypot(dx, dy));
-                const nidx = nCoord * 4;
-                rSum += src[nidx] * weight;
-                gSum += src[nidx + 1] * weight;
-                bSum += src[nidx + 2] * weight;
-                count += weight;
-              }
-            }
-          }
-          if (count > 0) {
-            const idx = coord * 4;
-            src[idx] = Math.round(rSum / count);
-            src[idx + 1] = Math.round(gSum / count);
-            src[idx + 2] = Math.round(bSum / count);
-            newlyResolved.push(coord);
-          }
-        }
-      }
-    }
-    for (const coord of newlyResolved) {
-      resolved[coord] = 0;
-    }
-    totalMasked -= newlyResolved.length;
-  }
-
+  inpaintMaskOnRgba(imgData.data, width, height, maskData.data);
   ctx.putImageData(imgData, 0, 0);
 
   logs.push(`[CLIENT INPAINT] Reconstructed patch composited smoothly.`);
