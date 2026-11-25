@@ -3,6 +3,7 @@ import { scanUint8ArrayProvenance, ProvenanceAuditResult } from './provenanceSca
 import {
   loadGeminiWatermarkRemoverSync,
   eraseGeminiSparklePixelData,
+  eraseCornerTextBadgePixelData,
   applyLockedCornerUnblend,
   applyBilateralCarrierDisruptionRgba,
   applyMedianFilter3x3Rgba,
@@ -332,12 +333,13 @@ export async function processGifBuffer(
     }
 
     if (shouldRemoveBadge) {
-      // Probe full detector on Frame 0 (and midpoint if nothing was locked yet), then run O(size^2) lock per frame
-      if (!keyframeProbed || (!lockedSparkleBox && i === Math.floor(frames.length / 2))) {
+      // Probe full detector on Frame 0 (or periodically if unlocked), then track + erase per frame
+      if (!keyframeProbed || (!lockedSparkleBox && (i % 12 === 0 || i === Math.floor(frames.length / 2)))) {
         const badgeMeta = eraseGeminiSparklePixelData(workRgba, width, height, {
           removerSyncFn: removerFn,
           cornerHint: options.cornerHint || 'auto',
           forceRescue: true,
+          preferHarmonicHeal: frames.length > 1,
         });
         keyframeProbed = true;
         if (badgeMeta.applied) {
@@ -345,8 +347,12 @@ export async function processGifBuffer(
           lockedSparkleBox = badgeMeta.lockBox || null;
         }
       } else if (lockedSparkleBox) {
-        applyLockedCornerUnblend(workRgba, width, height, lockedSparkleBox, options.cornerHint || 'auto');
-        badgeAppliedCount++;
+        if (applyLockedCornerUnblend(workRgba, width, height, lockedSparkleBox, options.cornerHint || 'auto')) {
+          badgeAppliedCount++;
+        }
+      }
+      if (eraseCornerTextBadgePixelData(workRgba, width, height, options.cornerHint || 'auto').applied) {
+        badgeAppliedCount = Math.max(badgeAppliedCount, 1);
       }
     }
 

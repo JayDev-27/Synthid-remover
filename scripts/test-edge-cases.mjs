@@ -8,7 +8,13 @@ import {
   stripMetadata,
 } from '../lib/imageProcessor.ts';
 import { processGifBuffer, decodeGifToFrames } from '../lib/gifProcessor.ts';
-import { loadGeminiWatermarkRemoverSync, eraseGeminiSparklePixelData } from '../lib/pixelPipeline.ts';
+import {
+  loadGeminiWatermarkRemoverSync,
+  eraseGeminiSparklePixelData,
+  eraseCornerTextBadgePixelData,
+  applyLockedCornerUnblend,
+  rescueOffGridSparkle,
+} from '../lib/pixelPipeline.ts';
 
 // ============================================================================
 // QA Test Harness & Statistics Collector
@@ -818,6 +824,103 @@ async function runSparkleRescueSuite() {
   } else {
     recordTest('Sparkle Rescue', 'Off-Grid 16:9 Edge-Straddling Star Detection & Unblending', 'FAIL', {
       error: `before=${beforeLum}, after=${afterLum}, meta=${JSON.stringify(meta)}`,
+    });
+  }
+
+  // Test 2: No-Dark-Pit Gate prevents carving black holes into natural rock texture without a sparkle
+  const rockW = 640;
+  const rockH = 360;
+  const rockBuf = new Uint8ClampedArray(rockW * rockH * 4);
+  for (let y = 0; y < rockH; y++) {
+    for (let x = 0; x < rockW; x++) {
+      const p = (y * rockW + x) * 4;
+      const tex = 95 + Math.round(22 * Math.sin(x * 0.25) * Math.cos(y * 0.22));
+      rockBuf[p] = tex;
+      rockBuf[p + 1] = tex - 4;
+      rockBuf[p + 2] = tex - 8;
+      rockBuf[p + 3] = 255;
+    }
+  }
+  const rockRescue = rescueOffGridSparkle(rockBuf, rockW, rockH, { preferHarmonicHeal: true });
+  let minRock = 255;
+  for (let i = 0; i < rockBuf.length; i += 4) if (rockBuf[i] < minRock) minRock = rockBuf[i];
+  if (!rockRescue && minRock >= 60) {
+    recordTest('Sparkle Rescue', 'No-Dark-Pit False-Positive Guard on Textured Stone', 'PASS', {
+      metric: `Zero false star carved (min luma stayed ${minRock})`,
+    });
+  } else {
+    recordTest('Sparkle Rescue', 'No-Dark-Pit False-Positive Guard on Textured Stone', 'FAIL', {
+      error: `False match=${JSON.stringify(rockRescue)}, minRock=${minRock}`,
+    });
+  }
+
+  // Test 3: Panning 44x44 Veo video sparkle tracking + translucent 'Veo' bottom-right wordmark removal
+  const vw = 1280;
+  const vh = 720;
+  const mod = await import('@pilio/gemini-watermark-remover/image-data');
+  const eng = await mod.createWatermarkEngine();
+  const alpha48 = await eng.getAlphaMap(48);
+  const alpha44 = new Float32Array(44 * 44);
+  for (let y = 0; y < 44; y++) {
+    const sy = (y * 47) / 43;
+    const y0 = Math.floor(sy), y1 = Math.min(47, y0 + 1), wy = sy - y0;
+    for (let x = 0; x < 44; x++) {
+      const sx = (x * 47) / 43;
+      const x0 = Math.floor(sx), x1 = Math.min(47, x0 + 1), wx = sx - x0;
+      alpha44[y * 44 + x] =
+        alpha48[y0 * 48 + x0] * (1 - wx) * (1 - wy) +
+        alpha48[y0 * 48 + x1] * wx * (1 - wy) +
+        alpha48[y1 * 48 + x0] * (1 - wx) * wy +
+        alpha48[y1 * 48 + x1] * wx * wy;
+    }
+  }
+  const paintSceneWithSparkleAndVeo = (sx) => {
+    const frame = new Uint8ClampedArray(vw * vh * 4);
+    for (let y = 0; y < vh; y++) {
+      const base = y < 622 ? 120 : 65;
+      for (let x = 0; x < vw; x++) {
+        const p = (y * vw + x) * 4;
+        frame[p] = base;
+        frame[p + 1] = base - 2;
+        frame[p + 2] = base - 5;
+        frame[p + 3] = 255;
+      }
+    }
+    for (let dy = 0; dy < 44; dy++) {
+      for (let dx = 0; dx < 44; dx++) {
+        const a = Math.min(0.85, alpha44[dy * 44 + dx] * 0.62);
+        if (a <= 0.01) continue;
+        const p = ((605 + dy) * vw + (sx + dx)) * 4;
+        for (let c = 0; c < 3; c++) frame[p + c] = Math.round(frame[p + c] * (1 - a) + 255 * a);
+      }
+    }
+    // Paint compact isolated 'Veo' glyph bar at bottom-right (1244..1269, 695..704)
+    for (let y = 696; y <= 703; y++) {
+      for (let x = 1244; x <= 1268; x++) {
+        if ((x % 8 < 3) || y === 699 || y === 702) {
+          const p = (y * vw + x) * 4;
+          frame[p] = Math.min(255, frame[p] + 80);
+          frame[p + 1] = Math.min(255, frame[p + 1] + 80);
+          frame[p + 2] = Math.min(255, frame[p + 2] + 80);
+        }
+      }
+    }
+    return frame;
+  };
+
+  const frame0 = paintSceneWithSparkleAndVeo(1162);
+  const f0Meta = eraseGeminiSparklePixelData(frame0, vw, vh, { removerSyncFn: removerFn, forceRescue: true, preferHarmonicHeal: true });
+  const veoMeta = eraseCornerTextBadgePixelData(frame0, vw, vh, 'bottom-right');
+  const frame1 = paintSceneWithSparkleAndVeo(1148); // Shifted -14px
+  const tracked = f0Meta.lockBox ? applyLockedCornerUnblend(frame1, vw, vh, f0Meta.lockBox, 'bottom-right') : false;
+  const f1Center = ((605 + 22) * vw + (1148 + 22)) * 4;
+  if (f0Meta.applied && f0Meta.lockBox?.size === 44 && veoMeta.applied && tracked && frame1[f1Center] < 105) {
+    recordTest('Sparkle Rescue', 'Panning 44px Veo Sparkle Tracking & Wordmark Erasure', 'PASS', {
+      metric: `Locked size=44, tracked -14px pan smoothly (center=${frame1[f1Center]}), Veo glyphs=${veoMeta.pixelCount}`,
+    });
+  } else {
+    recordTest('Sparkle Rescue', 'Panning 44px Veo Sparkle Tracking & Wordmark Erasure', 'FAIL', {
+      error: `f0=${JSON.stringify(f0Meta)}, veo=${JSON.stringify(veoMeta)}, tracked=${tracked}, f1Center=${frame1[f1Center]}`,
     });
   }
 }

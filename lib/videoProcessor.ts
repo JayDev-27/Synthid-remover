@@ -4,6 +4,7 @@ import { scanUint8ArrayProvenance, ProvenanceAuditResult } from './provenanceSca
 import {
   loadGeminiWatermarkRemoverSync,
   eraseGeminiSparklePixelData,
+  eraseCornerTextBadgePixelData,
   applyLockedCornerUnblend,
   applyBilateralCarrierDisruptionRgba,
   inpaintMaskOnRgba,
@@ -91,7 +92,8 @@ async function createVideoElement(file: File): Promise<{ video: HTMLVideoElement
 }
 
 async function seekVideo(video: HTMLVideoElement, timeSec: number): Promise<void> {
-  const clamped = Math.max(0, Math.min(Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.002) : timeSec, timeSec));
+  const safeMax = Number.isFinite(video.duration) && video.duration > 0.02 ? video.duration - 0.015 : timeSec;
+  const clamped = Math.max(0, Math.min(safeMax, timeSec));
   if (Math.abs(video.currentTime - clamped) < 0.002 && video.readyState >= 2) {
     return;
   }
@@ -214,7 +216,7 @@ function processVideoCanvasFrame(
   let touched = false;
   const shouldProbeThisFrame =
     !opts.lockState.probed ||
-    (!opts.lockState.box && opts.frameIndex === Math.floor(opts.totalFrames / 2));
+    (!opts.lockState.box && (opts.frameIndex % 24 === 0 || opts.frameIndex === Math.floor(opts.totalFrames / 2)));
 
   // Step 1: GPU-accelerated anisotropic subpixel coordinate squeeze when frequency disruption is enabled
   if (opts.shouldDisrupt && tempCanvas) {
@@ -248,6 +250,7 @@ function processVideoCanvasFrame(
           removerSyncFn: opts.removerFn,
           cornerHint: opts.cornerHint,
           forceRescue: true,
+          preferHarmonicHeal: true,
         });
         opts.lockState.probed = true;
         if (meta.applied) {
@@ -255,9 +258,12 @@ function processVideoCanvasFrame(
           opts.lockState.box = meta.lockBox || null;
         }
       } else if (opts.lockState.box) {
-        applyLockedCornerUnblend(imgData.data, width, height, opts.lockState.box, opts.cornerHint);
-        touched = true;
+        if (applyLockedCornerUnblend(imgData.data, width, height, opts.lockState.box, opts.cornerHint)) {
+          touched = true;
+        }
       }
+      const textRes = eraseCornerTextBadgePixelData(imgData.data, width, height, opts.cornerHint, height);
+      if (textRes.applied) touched = true;
     }
     const sigmaR = opts.disruptionMode === 'aggressive' ? 14 : 11;
     const noiseScale =
@@ -297,8 +303,8 @@ function processVideoCanvasFrame(
     }
 
     if (opts.shouldRemoveBadge) {
-      const bandW = Math.min(width, 220);
-      const bandH = Math.min(height, 180);
+      const bandW = Math.min(width, Math.max(240, Math.round(width * 0.40)));
+      const bandH = Math.min(height, Math.max(190, Math.round(height * 0.34)));
       let bx = Math.max(0, width - bandW);
       let by = Math.max(0, height - bandH);
       if (opts.cornerHint === 'bottom-left') bx = 0;
@@ -309,26 +315,31 @@ function processVideoCanvasFrame(
       }
 
       const cornerImg = ctx.getImageData(bx, by, bandW, bandH);
+      const effectiveCorner = opts.cornerHint === 'auto' ? 'bottom-right' : opts.cornerHint;
+      let cornerTouched = false;
       if (shouldProbeThisFrame) {
         const meta = eraseGeminiSparklePixelData(cornerImg.data, bandW, bandH, {
           removerSyncFn: opts.removerFn,
-          cornerHint: opts.cornerHint === 'auto' ? 'bottom-right' : opts.cornerHint,
+          cornerHint: effectiveCorner,
           forceRescue: true,
+          preferHarmonicHeal: true,
+          roiWidth: bandW,
+          roiHeight: bandH,
         });
         opts.lockState.probed = true;
         if (meta.applied) {
-          ctx.putImageData(cornerImg, bx, by);
           opts.lockState.box = meta.lockBox || null;
-          touched = true;
+          cornerTouched = true;
         }
       } else if (opts.lockState.box) {
-        applyLockedCornerUnblend(
-          cornerImg.data,
-          bandW,
-          bandH,
-          opts.lockState.box,
-          opts.cornerHint === 'auto' ? 'bottom-right' : opts.cornerHint
-        );
+        if (applyLockedCornerUnblend(cornerImg.data, bandW, bandH, opts.lockState.box, effectiveCorner)) {
+          cornerTouched = true;
+        }
+      }
+      if (eraseCornerTextBadgePixelData(cornerImg.data, bandW, bandH, effectiveCorner, height).applied) {
+        cornerTouched = true;
+      }
+      if (cornerTouched) {
         ctx.putImageData(cornerImg, bx, by);
         touched = true;
       }

@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { scanUint8ArrayProvenance, ProvenanceAuditResult } from './provenanceScanner';
-import { loadGeminiWatermarkRemoverSync, eraseGeminiSparklePixelData } from './pixelPipeline';
+import { loadGeminiWatermarkRemoverSync, eraseGeminiSparklePixelData, eraseCornerTextBadgePixelData } from './pixelPipeline';
 
 export type DisruptionMode = 'balanced' | 'aggressive' | 'metadata-only';
 export type { ProvenanceAuditResult };
@@ -638,8 +638,9 @@ export async function removeCornerBadge(inputBuffer: Buffer): Promise<{ buffer: 
       removerSyncFn: removerFn,
       forceRescue: true,
     });
+    const textMeta = eraseCornerTextBadgePixelData(rgba, info.width, info.height, 'auto');
 
-    if (meta.applied) {
+    if (meta.applied || textMeta.applied) {
       const cleanBuffer = await sharp(
         Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength),
         {

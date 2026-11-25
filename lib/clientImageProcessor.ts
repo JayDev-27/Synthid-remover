@@ -2,6 +2,7 @@ import { scanBase64Provenance, ProvenanceAuditResult } from './provenanceScanner
 import {
   loadGeminiWatermarkRemoverSync,
   eraseGeminiSparklePixelData,
+  eraseCornerTextBadgePixelData,
   applyBilateralCarrierDisruptionRgba,
   applyMedianFilter3x3Rgba,
   inpaintMaskOnRgba,
@@ -217,9 +218,20 @@ export async function processImageClientSide(
         cornerHint: options.cornerHint || 'auto',
         forceRescue: true,
       });
-      if (badgeMeta.applied) {
+      const textBadgeMeta = eraseCornerTextBadgePixelData(
+        imageData.data,
+        canvas.width,
+        canvas.height,
+        options.cornerHint || 'auto'
+      );
+      if (badgeMeta.applied || textBadgeMeta.applied) {
         ctx.putImageData(imageData, 0, 0);
-        logs.push(`[SUCCESS] Gemini sparkle badge removed via Reverse Alpha Blending (Tier: ${badgeMeta.decisionTier || 'auto'}).`);
+        if (badgeMeta.applied) {
+          logs.push(`[SUCCESS] Gemini sparkle badge removed via Reverse Alpha Blending (Tier: ${badgeMeta.decisionTier || 'auto'}).`);
+        }
+        if (textBadgeMeta.applied) {
+          logs.push(`[SUCCESS] Corner wordmark overlay detected and seamlessly reconstructed.`);
+        }
       }
     } catch (err) {
       console.warn('Client watermark removal warning:', err);
